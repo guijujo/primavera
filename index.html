@@ -27,16 +27,26 @@
        CAPA 2 · La carta (glassmorphism) superpuesta al canvas
        ============================================================ -->
   <main class="card" id="card" role="article" aria-label="Carta para Naza">
-    <p class="card__eyebrow">21 de septiembre · Primer día de primavera</p>
-    <h1 class="card__title">Para vos, Naza</h1>
-    <div class="card__rule" aria-hidden="true"><span></span>🌻<span></span></div>
+    <!-- Solo en el celular: esconde la carta para ver el ramo entero -->
+    <button class="card__toggle" id="btn-hide" type="button" aria-controls="card" aria-expanded="true" aria-label="Esconder la carta" title="Esconder la carta">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" /></svg>
+    </button>
 
-    <!-- El texto se escribe acá, letra por letra, desde script.js -->
-    <div class="letter" id="letter" aria-live="polite"></div>
+    <div class="card__scroll" id="card-scroll">
+      <p class="card__eyebrow">21 de septiembre · Primer día de primavera</p>
+      <h1 class="card__title">Para vos, Naza</h1>
+      <div class="card__rule" aria-hidden="true"><span></span>🌻<span></span></div>
 
-    <p class="card__sign" id="sign">Con todo mi amor,<br /><strong>Guille</strong></p>
-    <p class="card__hint" id="hint">toca la carta para leerla completa</p>
+      <!-- El texto se escribe acá, letra por letra, desde script.js -->
+      <div class="letter" id="letter" aria-live="polite"></div>
+
+      <p class="card__sign" id="sign">Con todo mi amor,<br /><strong>Guille</strong></p>
+      <p class="card__hint" id="hint">toca la carta para leerla completa</p>
+    </div>
   </main>
+
+  <!-- Aparece cuando la carta está escondida (solo celular) -->
+  <button class="btn-letter" id="btn-letter" type="button" aria-controls="card" aria-expanded="true">💌 Ver la carta</button>
 
   <!-- ============================================================
        CAPA 3 · Pantalla de bienvenida (dispara audio + florecimiento)
