@@ -7,12 +7,12 @@
      1. Ajustes generales
      2. Referencias del DOM y estado
      3. Escena, cámara, luces
-     4. Geometría de la flor (pétalos, corazón, tallo, hojas)
-     5. Armado del ramo
+     4. Geometría: pétalos, girasol, tulipán, tallos, hojas
+     5. Armado del ramo (tallos cruzados + moño)
      6. Polen flotante (partículas)
      7. Composición responsive y resize
      8. Bucle de animación (florecimiento + vaivén)
-     9. Carta con efecto máquina de escribir
+     9. Carta con efecto máquina de escribir (+ esconderla en el celu)
     10. Clave de 4 dígitos
     11. Música y apertura del regalo
    ============================================================= */
@@ -47,9 +47,9 @@
     msPorLetra: 32,               // velocidad de la máquina de escribir
     msPausaParrafo: 620,          // pausa entre párrafos
     // --- escena ---
-    colorPetaloA: 0xffc93c,       // amarillo principal
-    colorPetaloB: 0xffa726,       // corona interior (un poco más naranja)
+    colorGirasol: 0xffb300,       // pétalos del girasol (dorado intenso)
     colorTallo: 0x4c7a3f,
+    colorMonio: 0xf6ecd6,         // cinta de satén que ata el ramo (marfil)
     puntoQuiebre: 900,            // mismo breakpoint que styles.css
   };
 
@@ -57,11 +57,22 @@
   const ESMOVIL = window.matchMedia('(max-width: ' + (CONFIG.puntoQuiebre - 1) + 'px)').matches;
   const MENOS_MOVIMIENTO = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Definición de cada flor del ramo: posición, tamaño y retardo de apertura
+  /* Composición del ramo ✏️
+     x: izquierda (−) / derecha (+) · y: altura sobre el moño · z: adelante (+) / atrás (−)
+     tamano: escala de la flor · retardo: segundos extra antes de abrirse
+     hoja: hacia qué costado sale su hoja (−1 izquierda, 1 derecha)
+     Si agregás flores más altas o más anchas, ajustá MEDIDAS (sección 7). */
   const RAMO = [
-    { x:  0.00, z:  0.00, alto: 3.00, escala: 1.00, giro:  0.00, retardo: 0.00, color: CONFIG.colorPetaloA },
-    { x: -1.75, z: -0.85, alto: 2.45, escala: 0.86, giro:  0.90, retardo: 0.45, color: 0xffb62b },
-    { x:  1.70, z: -0.55, alto: 2.15, escala: 0.78, giro: -0.70, retardo: 0.80, color: 0xffd95e },
+    // Girasoles: adelante y al medio, mirando a quien mira
+    { tipo: 'girasol', x:  0.00, y: 2.30, z:  0.55, tamano: 1.00, retardo: 0.00, hoja: -1 },
+    { tipo: 'girasol', x: -1.15, y: 1.95, z:  0.20, tamano: 0.84, retardo: 0.35 },
+    { tipo: 'girasol', x:  1.20, y: 2.05, z:  0.15, tamano: 0.86, retardo: 0.55 },
+    // Tulipanes amarillos: más altos, atrás y a los costados
+    { tipo: 'tulipan', x: -0.55, y: 3.20, z: -0.30, tamano: 1.00, retardo: 0.20, color: 0xffd21f },
+    { tipo: 'tulipan', x:  0.60, y: 3.30, z: -0.35, tamano: 1.00, retardo: 0.45, color: 0xffc81a },
+    { tipo: 'tulipan', x: -1.55, y: 2.95, z: -0.30, tamano: 0.92, retardo: 0.70, color: 0xffdc3c },
+    { tipo: 'tulipan', x:  1.60, y: 3.00, z: -0.25, tamano: 0.92, retardo: 0.85, color: 0xffd21f },
+    { tipo: 'tulipan', x:  0.05, y: 3.60, z: -0.65, tamano: 0.95, retardo: 1.00, color: 0xffcc26 },
   ];
 
   /* =============================================================
@@ -74,6 +85,9 @@
   const btnAudio = $('btn-audio');
   const audio    = $('bgm');
   const card     = $('card');
+  const cardScroll = $('card-scroll');
+  const btnHide  = $('btn-hide');
+  const btnLetter = $('btn-letter');
   const letter   = $('letter');
   const sign     = $('sign');
   const hint     = $('hint');
@@ -90,6 +104,7 @@
     tiempo: 0,            // reloj propio acumulado
     visible: true,        // pestaña visible
     corriendo: false,     // ¿el bucle de render está activo?
+    cartaOculta: false,   // ¿la carta está escondida? (solo celular)
     audioOk: true,
   };
 
@@ -101,7 +116,7 @@
     return;
   }
 
-  let renderer, escena, camara, ramo, polen, planoSombra;
+  let renderer, escena, camara, ramo, polen;
   const objetivo = new THREE.Vector3();        // hacia dónde mira la cámara
   const camaraBase = new THREE.Vector3();      // posición de reposo de la cámara
   const puntero = { x: 0, y: 0 };              // parallax suave con mouse/dedo
@@ -110,6 +125,8 @@
   /* =============================================================
      3. ESCENA, CÁMARA Y LUCES
      ============================================================= */
+  let luzClave, luzCalida, monio;
+
   function iniciarEscena() {
     // --- Renderer: alpha:true deja ver el degradado CSS del body ---
     renderer = new THREE.WebGLRenderer({
@@ -132,115 +149,115 @@
     renderer.toneMappingExposure = 1.05;
 
     escena = new THREE.Scene();
-    // Niebla muy sutil: las flores del fondo se funden con la noche
-    escena.fog = new THREE.Fog(0x0b0f0c, 9, 26);
+    // Niebla muy sutil: solo apaga el polen lejano
+    escena.fog = new THREE.Fog(0x0b0f0c, 12, 30);
 
-    camara = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
+    // La cámara mira derecho hacia adelante (ver sección 7: así el
+    // encuadre del ramo se puede calcular exacto)
+    camara = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
 
     // ---------- LUCES ----------
     // Ambiente frío: llena las sombras sin apagar el dorado
     escena.add(new THREE.AmbientLight(0x6f86ad, 0.48));
 
-    // Luz clave (sol tibio): la que genera las sombras y el relieve
-    const clave = new THREE.DirectionalLight(0xffeec4, 1.55);
-    clave.position.set(4.5, 7.5, 5.0);
-    clave.castShadow = true;
+    // Luz clave (sol tibio): genera las sombras y el relieve. Apunta
+    // siempre al ramo y lo acompaña cuando se reacomoda en pantalla.
+    luzClave = new THREE.DirectionalLight(0xffeec4, 1.55);
+    luzClave.castShadow = true;
     const mapa = ESMOVIL ? 1024 : 2048;
-    clave.shadow.mapSize.set(mapa, mapa);
-    clave.shadow.camera.near = 1;
-    clave.shadow.camera.far = 24;
-    clave.shadow.camera.left = -6;
-    clave.shadow.camera.right = 6;
-    clave.shadow.camera.top = 7;
-    clave.shadow.camera.bottom = -3;
-    clave.shadow.bias = -0.0009;
-    clave.shadow.radius = 3;
-    escena.add(clave);
+    luzClave.shadow.mapSize.set(mapa, mapa);
+    const cs = luzClave.shadow.camera;
+    cs.near = 1;
+    cs.far = 30;
+    cs.left = -4.5;
+    cs.right = 4.5;
+    cs.top = 5.5;
+    cs.bottom = -4.5;
+    luzClave.shadow.bias = -0.0009;
+    escena.add(luzClave);
 
     // Luz de relleno azulada desde atrás: recorta la silueta de los pétalos
     const relleno = new THREE.DirectionalLight(0x9cc6ff, 0.40);
     relleno.position.set(-5, 2.5, -4);
     escena.add(relleno);
 
-    // Punto cálido delante del ramo: da ese brillo dorado a los pétalos
-    const calida = new THREE.PointLight(0xffa93a, 1.15, 16, 1);
-    calida.position.set(0.5, 2.2, 3.2);
-    escena.add(calida);
+    // Punto cálido delante del ramo: el brillo dorado de los pétalos
+    luzCalida = new THREE.PointLight(0xffa93a, 1.15, 18, 1);
+    escena.add(luzCalida);
 
-    // ---------- CONTENEDOR DEL RAMO ----------
+    // ---------- EL RAMO ----------
+    // Su origen (0,0,0) es el MOÑO: todos los tallos se cruzan ahí.
     ramo = new THREE.Group();
     ramo.visible = false;               // aparece recién al abrir el regalo
     escena.add(ramo);
+    luzClave.target = ramo;             // la sombra siempre cubre el ramo
 
-    // Suelo invisible que SOLO recibe sombras (ShadowMaterial)
-    planoSombra = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 30),
-      new THREE.ShadowMaterial({ opacity: 0.3 })
-    );
-    planoSombra.rotation.x = -Math.PI / 2;
-    planoSombra.position.y = -0.02;
-    planoSombra.receiveShadow = true;
-    ramo.add(planoSombra);
+    monio = crearMonio();
+    monio.scale.setScalar(0.0001);      // arranca invisible: aparece primero
+    ramo.add(monio);
 
-    // ---------- FLORES ----------
-    RAMO.forEach((def) => {
-      const flor = crearFlor(def);
-      flor.position.set(def.x, 0, def.z);
-      flor.rotation.y = def.giro;
-      ramo.add(flor);
-    });
+    RAMO.forEach(function (def) { ramo.add(crearFlor(def)); });
 
     // ---------- POLEN ----------
     polen = crearPolen(ESMOVIL ? 160 : 320);
     escena.add(polen);
 
-    actualizarComposicion();
-    camara.updateProjectionMatrix();
+    actualizarComposicion(true);
   }
 
   /* =============================================================
-     4. GEOMETRÍA DE LA FLOR
+     4. GEOMETRÍA DE LAS FLORES
      Todo se genera con matemática: curvas de Bézier para el contorno
-     del pétalo, extrusión para darle volumen, y una deformación
-     manual de los vértices para curvarlo y ahuecarlo.
+     de cada pétalo, extrusión para darle volumen, y una deformación
+     de los vértices para curvarlo y ahuecarlo. Con la MISMA función,
+     cambiando parámetros, salen pétalos de girasol, de tulipán y hojas.
      ============================================================= */
+  const ARRIBA = new THREE.Vector3(0, 1, 0);
+  const azar = (a) => (Math.random() - 0.5) * 2 * a;   // número al azar en [-a, a]
 
   /**
-   * Crea la geometría de UN pétalo.
-   * 1) Dibujamos medio contorno con curvas de Bézier y lo espejamos:
-   *    nace angosto en la base (0,0) y termina en punta en (0, largo).
-   * 2) ExtrudeGeometry le da espesor + bisel (bordes redondeados que
-   *    atrapan la luz y hacen el relieve dorado).
-   * 3) Recorremos los vértices para curvar, ahuecar y torsionar.
+   * Crea la geometría de UN pétalo (u hoja).
+   * 1) Contorno con curvas de Bézier: nace angosto en la base (0,0) y
+   *    termina en (0, largo), en punta ('aguda') o redondeado ('redonda').
+   * 2) ExtrudeGeometry le da espesor + bisel (bordes que atrapan la luz).
+   * 3) Recorremos los vértices para:
+   *      curva   → la punta se inclina hacia afuera (+) o hacia adentro (−)
+   *      canal   → los bordes se levantan: sección en "U" (copa del tulipán)
+   *      torsion → leve giro sobre su eje (nada en la naturaleza es plano)
+   *    y pintamos un degradado por vértice: base más oscura → punta clara.
    */
   function crearGeometriaPetalo(opciones) {
     const o = Object.assign({
-      largo: 1.35, ancho: 0.42, curva: 0.35, canal: 0.55, torsion: 0.18, segmentos: 16,
+      largo: 1, ancho: 0.3, curva: 0.3, canal: 0.5, torsion: 0.15,
+      punta: 'redonda', grosor: 0.04, segmentos: 14,
+      base: [0.86, 0.66, 0.50],       // multiplicador de color en la base
     }, opciones);
 
     const contorno = new THREE.Shape();
     contorno.moveTo(0, 0);
-    // lado derecho: sube desde la base ensanchándose
-    contorno.bezierCurveTo(o.ancho * 0.85, o.largo * 0.12, o.ancho, o.largo * 0.55, o.ancho * 0.30, o.largo * 0.93);
-    // punta redondeada (no en pico: así el pétalo se ve carnoso)
-    contorno.quadraticCurveTo(0, o.largo * 1.05, -o.ancho * 0.30, o.largo * 0.93);
-    // lado izquierdo: espejo del derecho, de vuelta a la base
-    contorno.bezierCurveTo(-o.ancho, o.largo * 0.55, -o.ancho * 0.85, o.largo * 0.12, 0, 0);
+    if (o.punta === 'aguda') {
+      // Lanceolado: los dos lados se juntan en punta (girasol, hojas)
+      contorno.bezierCurveTo(o.ancho * 0.9, o.largo * 0.18, o.ancho * 0.8, o.largo * 0.68, 0, o.largo);
+      contorno.bezierCurveTo(-o.ancho * 0.8, o.largo * 0.68, -o.ancho * 0.9, o.largo * 0.18, 0, 0);
+    } else {
+      // Redondeado: lados que se ensanchan y una punta suave (tulipán)
+      contorno.bezierCurveTo(o.ancho * 0.85, o.largo * 0.12, o.ancho, o.largo * 0.55, o.ancho * 0.30, o.largo * 0.93);
+      contorno.quadraticCurveTo(0, o.largo * 1.05, -o.ancho * 0.30, o.largo * 0.93);
+      contorno.bezierCurveTo(-o.ancho, o.largo * 0.55, -o.ancho * 0.85, o.largo * 0.12, 0, 0);
+    }
 
     const geo = new THREE.ExtrudeGeometry(contorno, {
-      depth: 0.045,
+      depth: o.grosor,
       bevelEnabled: true,
-      bevelThickness: 0.025,
-      bevelSize: 0.03,
+      bevelThickness: o.grosor * 0.5,
+      bevelSize: Math.min(0.028, o.ancho * 0.12),
       bevelSegments: 2,
       curveSegments: o.segmentos,
     });
 
-    // --- Deformación de los vértices: acá el pétalo deja de ser plano ---
-    // Y de paso pintamos un degradado por vértice: la base más anaranjada
-    // y la punta más clara, como en los girasoles de verdad.
     const pos = geo.attributes.position;
     const colores = new Float32Array(pos.count * 3);
+    const PUNTA = 1.06;
 
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
@@ -249,18 +266,17 @@
 
       const t = Math.max(0, Math.min(1, y / o.largo));   // 0 en la base, 1 en la punta
 
-      z += o.curva * t * t;                 // la punta se inclina hacia afuera
+      z += o.curva * t * t;                 // la punta se va hacia afuera / adentro
       z -= o.canal * x * x;                 // los bordes se levantan: sección en "U"
 
-      // Torsión suave alrededor del eje del pétalo (nada es perfectamente simétrico)
-      const a = o.torsion * t;
+      const a = o.torsion * t;              // torsión alrededor del eje del pétalo
       const cos = Math.cos(a), sen = Math.sin(a);
       pos.setXYZ(i, x * cos + z * sen, y, -x * sen + z * cos);
 
-      // Estos valores MULTIPLICAN al color del material
-      colores[i * 3 + 0] = 0.86 + 0.20 * t;
-      colores[i * 3 + 1] = 0.66 + 0.40 * t;
-      colores[i * 3 + 2] = 0.50 + 0.55 * t;
+      // Degradado (estos valores MULTIPLICAN al color del material)
+      colores[i * 3 + 0] = o.base[0] + (PUNTA - o.base[0]) * t;
+      colores[i * 3 + 1] = o.base[1] + (PUNTA - o.base[1]) * t;
+      colores[i * 3 + 2] = o.base[2] + (PUNTA - o.base[2]) * t;
     }
     pos.needsUpdate = true;
     geo.setAttribute('color', new THREE.BufferAttribute(colores, 3));
@@ -268,220 +284,355 @@
     return geo;
   }
 
-  /**
-   * Corona de pétalos: N copias del mismo pétalo, cada una dentro de un
-   * pivote girado alrededor del eje Y de la flor (360° / cantidad).
-   */
-  function agregarCorona(cabeza, lista, o) {
+  /* -------------------------------------------------------------
+     CORONA DE PÉTALOS INSTANCIADA
+     Todos los pétalos de un anillo son UNA sola malla (InstancedMesh):
+     la GPU los dibuja de una vez (1 draw call en vez de 20). Clave para
+     que el ramo ande fluido en el celular.
+     Cada pétalo i:
+       · gira alrededor del eje de la flor: ángulo θi = 360° · i / n
+       · se aleja `radio` del centro
+       · se inclina sobre su base: rx (0 = parado, π/2 = acostado)
+     El florecimiento interpola rx desde "cerrado" hasta "abierto".
+     ------------------------------------------------------------- */
+  const _maniqui = new THREE.Object3D();    // objeto auxiliar para armar matrices
+  _maniqui.rotation.order = 'YXZ';          // primero el giro θ, después la inclinación
+  const _tinte = new THREE.Color();
+
+  function crearCorona(o) {
+    const malla = new THREE.InstancedMesh(o.geometria, o.material, o.cantidad);
+    malla.castShadow = !ESMOVIL;            // en el celu ahorramos esta pasada de sombra
+    malla.receiveShadow = true;
+    malla.frustumCulled = false;            // las instancias se salen de la caja base
+
+    const paso = (Math.PI * 2) / o.cantidad;
+    const datos = [];
     for (let i = 0; i < o.cantidad; i++) {
-      const pivote = new THREE.Object3D();
-      pivote.rotation.y = o.desfase + (i / o.cantidad) * Math.PI * 2;
-
-      const petalo = new THREE.Mesh(o.geometria, o.material);
-      petalo.position.z = o.radio;                       // se apoya en el borde del corazón
-      petalo.castShadow = true;
-      petalo.receiveShadow = true;
-
-      // Pequeñas variaciones para que no parezca clonado a máquina
-      const inclinacion = o.inclinacion + (Math.random() - 0.5) * 0.14;
-      const escala = o.escala * (0.92 + Math.random() * 0.16);
-
-      // rotation.x = 90° deja el pétalo horizontal; le restamos la inclinación
-      // para levantarlo. Guardamos el valor final: el florecimiento interpola
-      // desde "capullo cerrado" hasta este objetivo.
-      petalo.rotation.x = Math.PI / 2 - inclinacion;
-      petalo.scale.setScalar(escala);
-      petalo.userData.inclinacion = inclinacion;
-      petalo.userData.escala = escala;
-
-      pivote.add(petalo);
-      cabeza.add(pivote);
-      lista.push(petalo);
+      datos.push({
+        angulo: (o.desfase || 0) + i * paso + azar(paso * (o.desorden || 0.08)),
+        rxAbierto: o.rxAbierto + azar(o.variacion || 0.06),
+        rxCerrado: o.rxCerrado,
+        escala: (o.escala || 1) * (0.9 + Math.random() * 0.2),
+        abanico: azar(0.08),                // leve abanico dentro de su plano
+      });
+      // Variación de tono pétalo a pétalo
+      if (malla.setColorAt) {
+        const v = 0.9 + Math.random() * 0.14;
+        _tinte.setRGB(v, v * (0.97 + Math.random() * 0.05), v);
+        malla.setColorAt(i, _tinte);
+      }
     }
+    malla.userData = { datos: datos, radio: o.radio };
+    posarCorona(malla, o.abierta ? 1 : 0);
+    return malla;
   }
 
-  /**
-   * Corazón de la flor: una cúpula + semillas distribuidas con el
-   * ÁNGULO ÁUREO (137.5°), la misma espiral de Fibonacci que usan los
-   * girasoles de verdad. Se dibujan con un InstancedMesh: cientos de
-   * semillas en una sola llamada de render.
-   */
-  function crearCorazon(radio) {
+  /** Ubica cada pétalo según cuánto se abrió la flor (0 = capullo, 1 = abierta). */
+  function posarCorona(malla, abrir) {
+    const d = malla.userData;
+    const crecer = 0.3 + 0.7 * abrir;       // el pétalo también crece al abrirse
+    for (let i = 0; i < d.datos.length; i++) {
+      const p = d.datos[i];
+      _maniqui.position.set(Math.sin(p.angulo) * d.radio, 0, Math.cos(p.angulo) * d.radio);
+      _maniqui.rotation.set(p.rxCerrado + (p.rxAbierto - p.rxCerrado) * abrir, p.angulo, p.abanico);
+      _maniqui.scale.setScalar(p.escala * crecer);
+      _maniqui.updateMatrix();
+      malla.setMatrixAt(i, _maniqui.matrix);
+    }
+    malla.instanceMatrix.needsUpdate = true;
+  }
+
+  /* -------------------------------------------------------------
+     GIRASOL
+     Disco oscuro con semillas en la espiral de Fibonacci: la semilla i
+     va al ángulo i · 137,5° (el ÁNGULO ÁUREO) y a un radio ∝ √i.
+     Es exactamente el patrón de los girasoles reales. Alrededor, 21 + 13
+     pétalos (también números de Fibonacci) y un collar de brácteas verdes.
+     ------------------------------------------------------------- */
+  const RADIO_DISCO = 0.5;
+
+  function crearDiscoGirasol() {
+    const R = RADIO_DISCO;
     const grupo = new THREE.Group();
 
-    const matBase = new THREE.MeshStandardMaterial({ color: 0x6b3d14, roughness: 0.85, metalness: 0.05 });
-    const cupula = new THREE.Mesh(
-      new THREE.SphereGeometry(radio, 28, 16, 0, Math.PI * 2, 0, Math.PI / 2),
-      matBase
-    );
-    cupula.scale.y = 0.45;
-    cupula.castShadow = true;
-    cupula.receiveShadow = true;
-    grupo.add(cupula);
+    // Cúpula apenas abombada
+    const disco = new THREE.Mesh(GEO.cupula, MAT.disco);
+    disco.scale.set(R, R * 0.28, R);
+    disco.receiveShadow = true;
+    grupo.add(disco);
 
-    const cantidad = ESMOVIL ? 70 : 120;
-    const ANGULO_AUREO = Math.PI * (3 - Math.sqrt(5));  // ≈ 137.5°
-    const semillas = new THREE.InstancedMesh(
-      new THREE.IcosahedronGeometry(radio * 0.085, 0),
-      new THREE.MeshStandardMaterial({ color: 0x8c5a1e, roughness: 0.7, metalness: 0.15, flatShading: true }),
-      cantidad
-    );
-    semillas.castShadow = true;
+    // Semillas: todas en una sola malla instanciada
+    const cantidad = ESMOVIL ? 130 : 230;
+    const ANGULO_AUREO = Math.PI * (3 - Math.sqrt(5));   // ≈ 137,5°
+    const semillas = new THREE.InstancedMesh(GEO.semilla, MAT.semilla, cantidad);
+    semillas.frustumCulled = false;
+    semillas.receiveShadow = true;
 
     const m = new THREE.Matrix4();
     const p = new THREE.Vector3();
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
     const s = new THREE.Vector3();
+    const verde = new THREE.Color(0x5b5a1c);    // centro verdoso
+    const marron = new THREE.Color(0x2e1a0c);   // cuerpo marrón oscuro
+    const ocre = new THREE.Color(0x8a5a14);     // flores del borde, con polen
 
     for (let i = 0; i < cantidad; i++) {
-      const r = radio * 0.94 * Math.sqrt(i / cantidad);   // sqrt reparte áreas iguales
+      const f = i / cantidad;                        // 0 en el centro, 1 en el borde
+      const r = R * 0.95 * Math.sqrt(f);             // √ reparte áreas iguales
       const a = i * ANGULO_AUREO;
-      const altura = radio * 0.45 * Math.sqrt(Math.max(0, 1 - (r / radio) * (r / radio)));
+      const altura = R * 0.28 * Math.sqrt(Math.max(0, 1 - 0.9025 * f));   // sobre la cúpula
       p.set(Math.cos(a) * r, altura, Math.sin(a) * r);
-      e.set(Math.random() * 3, a, Math.random() * 3);
+      e.set(azar(0.3), a, azar(0.3));
       q.setFromEuler(e);
-      const k = 0.75 + Math.random() * 0.45;
-      s.set(k, k, k);
+      const k = 0.75 + 0.55 * f + Math.random() * 0.15;   // más grandes hacia el borde
+      s.set(k, k * 0.6, k);
       semillas.setMatrixAt(i, m.compose(p, q, s));
+
+      if (semillas.setColorAt) {
+        _tinte.copy(verde).lerp(marron, Math.min(1, f * 1.8));
+        if (f > 0.8) _tinte.lerp(ocre, (f - 0.8) / 0.2);
+        semillas.setColorAt(i, _tinte);
+      }
     }
     semillas.instanceMatrix.needsUpdate = true;
     grupo.add(semillas);
-
     return grupo;
   }
 
-  /**
-   * Tallo: una curva Catmull-Rom (suave, con una ligera "S") convertida
-   * en un tubo. Devuelve también la curva para poder colgar las hojas
-   * en puntos exactos con curva.getPointAt(t).
-   * (Alternativa más simple: un CylinderGeometry recto.)
-   */
-  function crearTallo(alto, curvatura, material) {
-    const curva = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(curvatura * 0.9, 0, 0.25),
-      new THREE.Vector3(curvatura * 0.4, alto * 0.33, 0.12),
-      new THREE.Vector3(-curvatura * 0.3, alto * 0.66, -0.05),
-      new THREE.Vector3(0, alto, 0),
-    ]);
-    const geo = new THREE.TubeGeometry(curva, ESMOVIL ? 28 : 48, 0.052, ESMOVIL ? 6 : 10, false);
-    const malla = new THREE.Mesh(geo, material);
-    malla.castShadow = true;
-    malla.receiveShadow = true;
-    return { malla: malla, curva: curva };
+  function crearGirasol() {
+    const R = RADIO_DISCO;
+    const cabeza = new THREE.Group();
+    const coronas = [];
+
+    cabeza.add(crearDiscoGirasol());
+
+    // Reverso verde (tapa la unión con el tallo)
+    const reverso = new THREE.Mesh(GEO.reverso, MAT.bractea);
+    reverso.scale.set(R * 0.95, R * 0.42, R * 0.95);
+    reverso.castShadow = true;
+    cabeza.add(reverso);
+
+    // Collar de brácteas verdes, apuntando un poco hacia atrás (estático)
+    const bracteas = crearCorona({
+      geometria: GEO.bractea, material: MAT.bractea, cantidad: 16,
+      radio: R * 0.75, rxAbierto: Math.PI / 2 + 0.3, rxCerrado: Math.PI / 2 + 0.3,
+      desorden: 0.3, abierta: true,
+    });
+    bracteas.position.y = -0.04;
+    cabeza.add(bracteas);
+
+    // Dos anillos de pétalos (21 + 13), el interior desfasado medio paso
+    coronas.push(crearCorona({
+      geometria: GEO.petaloGirasol, material: MAT.girasol, cantidad: 21,
+      radio: R * 0.9, rxAbierto: Math.PI / 2 - 0.08, rxCerrado: 0.15,
+    }));
+    coronas.push(crearCorona({
+      geometria: GEO.petaloGirasol, material: MAT.girasol, cantidad: 13,
+      radio: R * 0.82, rxAbierto: Math.PI / 2 - 0.38, rxCerrado: 0.10,
+      escala: 0.9, desfase: Math.PI / 13,
+    }));
+    coronas.forEach(function (c) { cabeza.add(c); });
+
+    return { cabeza: cabeza, coronas: coronas };
   }
 
-  /** Hoja: mismo truco que el pétalo (contorno + extrusión + curvado). */
-  function crearGeometriaHoja() {
-    return crearGeometriaPetalo({ largo: 1.0, ancho: 0.34, curva: 0.28, canal: 0.35, torsion: 0.5, segmentos: 12 });
+  /* -------------------------------------------------------------
+     TULIPÁN
+     Seis pétalos anchos y muy ahuecados (canal alto) que se curvan
+     hacia adentro (curva negativa): juntos forman la copa. Como en el
+     tulipán real, van en dos anillos de 3, desfasados 60°.
+     ------------------------------------------------------------- */
+  function crearTulipan(def) {
+    const cabeza = new THREE.Group();
+    const coronas = [];
+    const material = materialPetalo(def.color, 0xff9d00);
+
+    const base = new THREE.Mesh(GEO.bolita, MAT.tallo);
+    base.scale.y = 0.9;
+    base.position.y = 0.03;
+    cabeza.add(base);
+
+    coronas.push(crearCorona({
+      geometria: GEO.petaloTulipan, material: material, cantidad: 3,
+      radio: 0.06, rxAbierto: 0.34, rxCerrado: 0.03, desorden: 0.06,
+    }));
+    coronas.push(crearCorona({
+      geometria: GEO.petaloTulipan, material: material, cantidad: 3,
+      radio: 0.035, rxAbierto: 0.20, rxCerrado: -0.02, escala: 0.95,
+      desfase: Math.PI / 3, desorden: 0.06,
+    }));
+    coronas.forEach(function (c) { cabeza.add(c); });
+
+    return { cabeza: cabeza, coronas: coronas };
+  }
+
+  /* -------------------------------------------------------------
+     TALLO: una curva Catmull-Rom convertida en tubo.
+     ------------------------------------------------------------- */
+  function crearTallo(curva, grosor) {
+    const geo = new THREE.TubeGeometry(curva, ESMOVIL ? 24 : 40, grosor, ESMOVIL ? 6 : 8, false);
+    const malla = new THREE.Mesh(geo, MAT.tallo);
+    malla.castShadow = true;
+    malla.receiveShadow = true;
+    return malla;
   }
 
   // --- Geometrías y materiales compartidos (se crean UNA vez) ---
-  const GEO = {
-    petaloExterno: null,
-    petaloInterno: null,
-    hoja: null,
-  };
-  const MAT = {
-    tallo: null,
-    hoja: null,
-    petalos: {},   // cache por color
-  };
+  const GEO = {};
+  const MAT = {};
+  const MAT_PETALOS = {};
 
   function prepararRecursos() {
-    GEO.petaloExterno = crearGeometriaPetalo({ largo: 1.55, ancho: 0.46, curva: 0.40, canal: 0.42, torsion: 0.18, segmentos: ESMOVIL ? 12 : 18 });
-    GEO.petaloInterno = crearGeometriaPetalo({ largo: 1.05, ancho: 0.34, curva: 0.30, canal: 0.6, torsion: -0.22, segmentos: ESMOVIL ? 10 : 16 });
-    GEO.hoja = crearGeometriaHoja();
+    const seg = ESMOVIL ? 10 : 16;
 
-    MAT.tallo = new THREE.MeshStandardMaterial({ color: CONFIG.colorTallo, roughness: 0.78, metalness: 0.05 });
-    MAT.hoja  = new THREE.MeshStandardMaterial({ color: 0x5f9145, roughness: 0.68, metalness: 0.08, side: THREE.DoubleSide });
+    GEO.petaloGirasol = crearGeometriaPetalo({
+      largo: 0.62, ancho: 0.17, curva: 0.14, canal: 1.1, torsion: 0.22,
+      punta: 'aguda', grosor: 0.03, segmentos: seg, base: [0.9, 0.6, 0.4],
+    });
+    GEO.bractea = crearGeometriaPetalo({
+      largo: 0.36, ancho: 0.13, curva: 0.08, canal: 0.6, torsion: 0.1,
+      punta: 'aguda', grosor: 0.025, segmentos: 8, base: [0.7, 0.75, 0.7],
+    });
+    GEO.petaloTulipan = crearGeometriaPetalo({
+      largo: 0.9, ancho: 0.34, curva: -0.14, canal: 1.7, torsion: 0.06,
+      punta: 'redonda', grosor: 0.03, segmentos: seg, base: [0.92, 0.72, 0.5],
+    });
+    GEO.hojaGirasol = crearGeometriaPetalo({
+      largo: 1.0, ancho: 0.42, curva: 0.3, canal: 0.3, torsion: 0.35,
+      punta: 'aguda', grosor: 0.025, segmentos: 12, base: [0.75, 0.8, 0.72],
+    });
+    GEO.hojaTulipan = crearGeometriaPetalo({
+      largo: 1.5, ancho: 0.18, curva: 0.55, canal: 0.6, torsion: 0.7,
+      punta: 'aguda', grosor: 0.02, segmentos: 12, base: [0.78, 0.84, 0.78],
+    });
+
+    GEO.semilla = new THREE.IcosahedronGeometry(0.032, 0);
+    GEO.cupula = new THREE.SphereGeometry(1, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2);            // media esfera de arriba
+    GEO.reverso = new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2); // media esfera de abajo
+    GEO.bolita = new THREE.SphereGeometry(0.085, 12, 8);
+    GEO.colaMonio = new THREE.BoxGeometry(0.085, 0.46, 0.012);
+    GEO.colaMonio.translate(0, -0.23, 0);   // que cuelgue desde arriba
+
+    MAT.tallo   = new THREE.MeshStandardMaterial({ color: CONFIG.colorTallo, roughness: 0.78, metalness: 0.05, side: THREE.DoubleSide });
+    MAT.hoja    = new THREE.MeshStandardMaterial({ color: 0x5f9145, roughness: 0.62, metalness: 0.08, side: THREE.DoubleSide, vertexColors: true });
+    MAT.bractea = new THREE.MeshStandardMaterial({ color: 0x4f7f3a, roughness: 0.7, metalness: 0.05, side: THREE.DoubleSide, vertexColors: true });
+    MAT.disco   = new THREE.MeshStandardMaterial({ color: 0x3b2412, roughness: 0.92, metalness: 0.02 });
+    MAT.semilla = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, metalness: 0.1, flatShading: true });
+    MAT.monio   = new THREE.MeshStandardMaterial({ color: CONFIG.colorMonio, roughness: 0.3, metalness: 0.12, side: THREE.DoubleSide });
+    MAT.girasol = materialPetalo(CONFIG.colorGirasol, 0xff7a00);
   }
 
-  /** Material dorado del pétalo (reutiliza el mismo si el color se repite). */
-  function materialPetalo(color) {
-    if (!MAT.petalos[color]) {
-      MAT.petalos[color] = new THREE.MeshStandardMaterial({
+  /** Material satinado de pétalo (se reutiliza si el color se repite). */
+  function materialPetalo(color, emisivo) {
+    const clave = color + '_' + emisivo;
+    if (!MAT_PETALOS[clave]) {
+      MAT_PETALOS[clave] = new THREE.MeshStandardMaterial({
         color: color,
-        vertexColors: true,       // usa el degradado base→punta
+        vertexColors: true,       // usa el degradado base → punta
         roughness: 0.34,          // bajo = brillo satinado
-        metalness: 0.22,          // toque metálico → acabado dorado
-        emissive: 0xff8c00,       // autoiluminación tenue: "brilla" en la noche
-        emissiveIntensity: 0.10,
+        metalness: 0.18,          // toque metálico → acabado dorado
+        emissive: emisivo,        // autoiluminación tenue: "brilla" en la noche
+        emissiveIntensity: 0.1,
         side: THREE.DoubleSide,   // los pétalos son finos: se ven de los dos lados
       });
     }
-    return MAT.petalos[color];
+    return MAT_PETALOS[clave];
   }
 
   /* =============================================================
-     5. ARMADO DE UNA FLOR COMPLETA
-     El origen del grupo está en la BASE del tallo, así el vaivén y
-     el florecimiento (escala 0 → 1) nacen desde el suelo.
+     5. ARMADO DEL RAMO
+     Ramo atado a mano: todos los tallos se CRUZAN en el moño (el origen
+     del grupo), se abren hacia arriba en las flores y un poquito hacia
+     abajo en los cortes. Cada flor crece desde el moño al florecer.
      ============================================================= */
   function crearFlor(def) {
     const flor = new THREE.Group();
-    const petalos = [];
+    const esGirasol = def.tipo === 'girasol';
+    const cabezaPos = new THREE.Vector3(def.x, def.y, def.z);
 
-    // --- Tallo ---
-    const tallo = crearTallo(def.alto, 0.28, MAT.tallo);
-    flor.add(tallo.malla);
+    // 1) Curva del tallo: corte (bajo el moño) → moño → mitad → flor
+    const curva = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-def.x * 0.15, -0.95, -def.z * 0.15 + 0.02),
+      new THREE.Vector3(def.x * 0.03, 0, def.z * 0.03),
+      new THREE.Vector3(def.x * 0.5 + azar(0.08), def.y * 0.55, def.z * 0.5 + azar(0.08)),
+      cabezaPos.clone(),
+    ]);
+    flor.add(crearTallo(curva, esGirasol ? 0.055 : 0.036));
 
-    // --- Hojas colgadas de la curva del tallo ---
-    [0.33, 0.58].forEach((t, i) => {
-      const hoja = new THREE.Mesh(GEO.hoja, MAT.hoja);
-      const punto = tallo.curva.getPointAt(t);
-      hoja.position.copy(punto);
-      hoja.rotation.set(
-        Math.PI / 2 - 0.55,                       // caída hacia afuera
-        (i === 0 ? 1 : -1) * (1.1 + Math.random() * 0.4),  // una para cada lado
-        (i === 0 ? 1 : -1) * 0.35
-      );
-      hoja.scale.setScalar(0.85 - i * 0.15);
-      hoja.castShadow = true;
-      hoja.receiveShadow = true;
-      flor.add(hoja);
-    });
+    // 2) Una hoja que sale del tallo hacia un costado
+    const lado = def.hoja || (def.x >= 0 ? 1 : -1);
+    const punto = curva.getPointAt(esGirasol ? 0.52 : 0.42);
+    const dirHoja = new THREE.Vector3(lado * 0.85, esGirasol ? 0.45 : 0.8, 0.3 + def.z * 0.3).normalize();
+    const hoja = new THREE.Mesh(esGirasol ? GEO.hojaGirasol : GEO.hojaTulipan, MAT.hoja);
+    hoja.position.copy(punto);
+    hoja.quaternion.setFromUnitVectors(ARRIBA, dirHoja);
+    hoja.rotateY(azar(0.5));               // gira un poco la lámina
+    hoja.scale.setScalar(def.tamano);
+    hoja.castShadow = true;
+    hoja.receiveShadow = true;
+    flor.add(hoja);
 
-    // --- Cabeza de la flor, en la punta del tallo ---
-    const cabeza = new THREE.Group();
-    cabeza.position.set(0, def.alto, 0);
-    cabeza.rotation.x = 0.34;    // se asoma hacia quien mira
-    cabeza.rotation.z = 0.08;
+    // 3) La cabeza sigue la dirección final del tallo, un poco girada
+    //    hacia quien mira (los girasoles más: "buscan el sol")
+    const pivote = new THREE.Group();
+    pivote.position.copy(cabezaPos);
+    const dir = curva.getTangentAt(1);
+    dir.z += esGirasol ? 0.85 : 0.2;
+    pivote.quaternion.setFromUnitVectors(ARRIBA, dir.normalize());
 
-    const radioCorazon = 0.42;
-    cabeza.add(crearCorazon(radioCorazon));
+    const armado = esGirasol ? crearGirasol() : crearTulipan(def);
+    armado.cabeza.scale.setScalar(def.tamano);
+    pivote.add(armado.cabeza);
+    flor.add(pivote);
 
-    // Cáliz verde por detrás (tapa la unión entre pétalos y tallo)
-    const caliz = new THREE.Mesh(new THREE.SphereGeometry(radioCorazon * 0.92, 20, 12), MAT.hoja);
-    caliz.scale.y = 0.32;
-    caliz.position.y = -0.11;
-    caliz.castShadow = true;
-    cabeza.add(caliz);
-
-    // Dos coronas de pétalos: la interna va desfasada media posición
-    agregarCorona(cabeza, petalos, {
-      cantidad: 10, geometria: GEO.petaloExterno, material: materialPetalo(def.color),
-      inclinacion: 0.20, escala: 1.0, desfase: 0, radio: radioCorazon * 0.80,
-    });
-    agregarCorona(cabeza, petalos, {
-      cantidad: 8, geometria: GEO.petaloInterno, material: materialPetalo(CONFIG.colorPetaloB),
-      inclinacion: 0.70, escala: 0.95, desfase: Math.PI / 8, radio: radioCorazon * 0.55,
-    });
-
-    flor.add(cabeza);
-
-    // Datos que necesita el bucle de animación
+    // Datos que usa el bucle de animación
     flor.userData = {
-      cabeza: cabeza,
-      petalos: petalos,
+      cabeza: armado.cabeza,
+      coronas: armado.coronas,
       retardo: def.retardo,
-      escalaFinal: def.escala,
-      fase: Math.random() * Math.PI * 2,   // desfase del vaivén
-      giroCabeza: cabeza.rotation.y,
+      fase: Math.random() * Math.PI * 2,   // desfase del cabeceo
+      abrirPrevio: -1,
     };
 
-    flor.scale.setScalar(0.0001);          // arranca cerrada (invisible)
+    flor.scale.setScalar(0.0001);          // arranca escondida en el moño
     return flor;
+  }
+
+  /**
+   * MOÑO DE SATÉN: una banda (cilindro abierto) que abraza los tallos,
+   * dos lazos (toros aplastados), el nudo y dos colas que cuelgan.
+   */
+  function crearMonio() {
+    const g = new THREE.Group();
+    const mat = MAT.monio;
+
+    const banda = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.19, 0.2, 36, 1, true), mat);
+    g.add(banda);
+
+    const lazoGeo = new THREE.TorusGeometry(0.17, 0.045, 12, 40);
+    [-1, 1].forEach(function (lado) {
+      const lazo = new THREE.Mesh(lazoGeo, mat);
+      lazo.scale.set(1.25, 0.62, 0.55);
+      lazo.position.set(lado * 0.2, 0.03, 0.24);
+      lazo.rotation.set(0, lado * 0.35, lado * 0.32);
+      g.add(lazo);
+
+      const cola = new THREE.Mesh(GEO.colaMonio, mat);
+      cola.position.set(lado * 0.07, -0.04, 0.24);
+      cola.rotation.set(0.15, 0, lado * 0.32);
+      g.add(cola);
+    });
+
+    const nudo = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), mat);
+    nudo.scale.set(1, 1.15, 0.8);
+    nudo.position.set(0, 0.02, 0.23);
+    g.add(nudo);
+
+    g.traverse(function (o) {
+      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+    });
+    return g;
   }
 
   /* =============================================================
@@ -509,7 +660,7 @@
 
     for (let i = 0; i < cantidad; i++) {
       posiciones[i * 3 + 0] = (Math.random() - 0.5) * 20;
-      posiciones[i * 3 + 1] = Math.random() * 12 - 2;
+      posiciones[i * 3 + 1] = Math.random() * 11 - 5.5;
       posiciones[i * 3 + 2] = (Math.random() - 0.5) * 10 - 1;
       velocidades[i] = 0.12 + Math.random() * 0.35;      // sube lento
       semillas[i] = Math.random() * Math.PI * 2;
@@ -537,57 +688,81 @@
       const j = i * 3;
       attr.array[j + 1] += velocidades[i] * dt;                                   // flota hacia arriba
       attr.array[j] += Math.sin(estado.tiempo * 0.6 + semillas[i]) * 0.12 * dt;   // deriva lateral
-      if (attr.array[j + 1] > 10) attr.array[j + 1] = -2.5;                        // vuelve abajo
+      if (attr.array[j + 1] > 5.5) attr.array[j + 1] = -5.5;                       // vuelve abajo
     }
     attr.needsUpdate = true;
   }
 
   /* =============================================================
      7. COMPOSICIÓN RESPONSIVE + RESIZE
+     El ramo se escala y se ubica para entrar SIEMPRE en la zona libre
+     de la pantalla. Con la cámara mirando derecho, el alto de pantalla
+     y el del mundo se relacionan de forma lineal:
+         alto visible = 2 · tan(fov / 2) · distancia
      ============================================================= */
-  const RADIO_RAMO = 3.3;   // medio ancho del ramo en unidades de la escena
-  const ALTO_FLOR  = 3.0;   // altura de la flor principal (ver RAMO[0].alto)
+  // Medidas del ramo en unidades de la escena (el moño está en y = 0)
+  const MEDIDAS = {
+    anchoMitad: 2.2,      // medio ancho, hasta el pétalo más lateral
+    abajo: -1.0,          // corte de los tallos
+    arriba: 4.45,         // punta del tulipán más alto
+    cabezasAbajo: 1.1,    // borde inferior de la flor más baja
+  };
+  const DISTANCIA_CAMARA = 10;
+  const destino = { pos: new THREE.Vector3(), escala: 1 };   // hacia dónde se desliza el ramo
 
-  function actualizarComposicion() {
-    const escritorio = window.innerWidth >= CONFIG.puntoQuiebre;
-    camara.aspect = window.innerWidth / window.innerHeight;
+  function actualizarComposicion(instantaneo) {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const escritorio = w >= CONFIG.puntoQuiebre;
+    const cartaOculta = estado.cartaOculta && !escritorio;
 
+    camara.aspect = w / h;
+    camaraBase.set(0, 0, DISTANCIA_CAMARA);
+    objetivo.set(0, 0, 0);
+
+    const tan = Math.tan((camara.fov / 2) * Math.PI / 180);
+    const altoVisible = 2 * tan * DISTANCIA_CAMARA;
+    const anchoVisible = altoVisible * camara.aspect;
+
+    // Zona de la pantalla que puede ocupar el ramo (fracciones medidas
+    // desde arriba) y desde qué altura del ramo tiene que entrar ahí.
+    let zona;
     if (escritorio) {
-      // Pantalla ancha: la carta va a la izquierda, el ramo a la derecha
-      camaraBase.set(0.7, 0.9, 7.3);
-      objetivo.set(1.7, 0.5, 0);
-      ramo.position.x = 1.9;
+      // La carta va a la izquierda: el ramo entero en la mitad derecha
+      zona = { arriba: 0.06, abajo: 0.95, desde: MEDIDAS.abajo, ancho: 0.46, centroX: 0.25 };
+    } else if (cartaOculta) {
+      // Carta escondida: el ramo completo es el protagonista
+      zona = { arriba: 0.10, abajo: 0.86, desde: MEDIDAS.abajo, ancho: 1.02, centroX: 0 };
     } else {
-      // Vertical (celular): el ramo arriba, la carta abajo
-      camaraBase.set(0, 1.0, 8.8);
-      objetivo.set(0, 0.6, 0);
-      ramo.position.x = 0;
+      // Carta abajo: arriba solo las flores; tallos y moño quedan tras el vidrio
+      zona = { arriba: 0.07, abajo: 0.40, desde: MEDIDAS.cabezasAbajo, ancho: 1.0, centroX: 0 };
     }
 
-    // --- El ramo se achica lo justo para entrar SIEMPRE en el ancho visible ---
-    // ancho visible a la altura del ramo = 2 · tan(fov/2) · distancia · aspecto
-    const tan = Math.tan((camara.fov / 2) * Math.PI / 180);
-    const anchoVisible = 2 * tan * camaraBase.z * camara.aspect;
-    let k = anchoVisible / (2 * RADIO_RAMO);
-    k = Math.max(0.42, Math.min(1, k));
-    ramo.scale.setScalar(k);
+    const altoZona = (zona.abajo - zona.arriba) * altoVisible;
+    const altoRamo = MEDIDAS.arriba - zona.desde;
+    let k = Math.min(altoZona / altoRamo, (zona.ancho * anchoVisible) / (2 * MEDIDAS.anchoMitad));
+    k = Math.min(k, 1.2);
 
-    // Y lo subimos para que la flor principal quede en el tercio superior
-    // (así la carta, que va abajo, nunca la tapa).
-    ramo.position.y = (escritorio ? 2.0 : 1.9) - k * ALTO_FLOR;
-    ramo.position.z = 0;
+    const yCentroZona = (0.5 - (zona.arriba + zona.abajo) / 2) * altoVisible;
+    destino.escala = k;
+    destino.pos.set(
+      zona.centroX * anchoVisible,
+      yCentroZona - k * (MEDIDAS.arriba + zona.desde) / 2,
+      0
+    );
 
-    camara.position.copy(camaraBase);
-    camara.lookAt(objetivo);
+    if (instantaneo) {
+      ramo.position.copy(destino.pos);
+      ramo.scale.setScalar(destino.escala);
+      camara.position.copy(camaraBase);
+    }
+    camara.updateProjectionMatrix();      // ← imprescindible tras cambiar el aspect
   }
 
   function ajustarTamano() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(w, h);
-    actualizarComposicion();          // recalcula aspect, encuadre y escala
-    camara.updateProjectionMatrix();  // ← imprescindible tras cambiar el aspect
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    actualizarComposicion();              // recalcula aspect, encuadre y escala
   }
 
   // El resize se agrupa en un requestAnimationFrame (evita recalcular de más)
@@ -628,43 +803,45 @@
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const mezclar = (a, b, t) => a + (b - a) * t;
 
-  function animarFlores(dt) {
+  function animarRamo() {
+    const t = estado.tiempo;
+    const desde = estado.abierto ? t - estado.t0 : 0;
+
+    // 1) El moño aparece primero, con un pequeño rebote
+    monio.scale.setScalar(Math.max(0.0001, easeOutBack(clamp01(desde / 0.7))));
+
     ramo.children.forEach(function (flor) {
       const d = flor.userData;
-      if (!d || !d.petalos) return;   // salteamos el plano de sombra
+      if (!d || !d.coronas) return;        // el moño no es una flor
 
-      // --- Progreso del florecimiento de ESTA flor ---
+      // Progreso del florecimiento de ESTA flor (0 → 1)
       const p = estado.abierto
-        ? clamp01((estado.tiempo - estado.t0 - d.retardo) / CONFIG.duracionFlorecimiento)
+        ? clamp01((desde - 0.25 - d.retardo) / CONFIG.duracionFlorecimiento)
         : 0;
 
-      // 1) El tallo crece desde el suelo (escala 0 → 1 con rebote)
-      const crecer = easeOutBack(clamp01(p / 0.75));
-      flor.scale.setScalar(Math.max(0.0001, d.escalaFinal * crecer));
+      // 2) La flor brota desde el moño (escala 0 → 1 con rebote)
+      flor.scale.setScalar(Math.max(0.0001, easeOutBack(clamp01(p / 0.7))));
 
-      // 2) Los pétalos se abren: de capullo cerrado a su inclinación final
+      // 3) Los pétalos se abren; cuando terminan, dejamos de recalcular
       const abrir = easeOutCubic(clamp01((p - 0.3) / 0.7));
-      for (let i = 0; i < d.petalos.length; i++) {
-        const petalo = d.petalos[i];
-        const inclinacion = mezclar(1.45, petalo.userData.inclinacion, abrir);  // 1.45 rad ≈ cerrado
-        petalo.rotation.x = Math.PI / 2 - inclinacion;
-        petalo.scale.setScalar(petalo.userData.escala * mezclar(0.25, 1, abrir));
+      if (abrir !== d.abrirPrevio) {
+        d.coronas.forEach(function (c) { posarCorona(c, abrir); });
+        d.abrirPrevio = abrir;
       }
 
-      // 3) La cabeza gira un poco mientras se abre (efecto "se despereza")
-      d.cabeza.rotation.y = d.giroCabeza + (1 - abrir) * -1.0;
-
-      // 4) Vaivén permanente: la flor respira con una brisa imaginaria
+      // 4) La cabeza se despereza girando al abrir y después cabecea con la brisa
+      d.cabeza.rotation.y = (1 - abrir) * -1.2;
       if (!MENOS_MOVIMIENTO) {
-        const t = estado.tiempo;
-        flor.rotation.z = Math.sin(t * 0.75 + d.fase) * 0.035;
-        flor.rotation.x = Math.cos(t * 0.55 + d.fase) * 0.025;
-        d.cabeza.rotation.z = 0.08 + Math.sin(t * 0.9 + d.fase) * 0.05;
+        d.cabeza.rotation.x = Math.sin(t * 0.9 + d.fase) * 0.045;
+        d.cabeza.rotation.z = Math.cos(t * 0.7 + d.fase) * 0.04;
       }
     });
 
-    // Rotación suave de todo el ramo
-    if (!MENOS_MOVIMIENTO) ramo.rotation.y += dt * 0.09;
+    // 5) Rotación suave: el ramo se mece de un lado al otro, como en la mano
+    if (!MENOS_MOVIMIENTO) {
+      ramo.rotation.y = Math.sin(t * 0.32) * 0.45;
+      ramo.rotation.z = Math.sin(t * 0.5 + 1.3) * 0.025;
+    }
   }
 
   function bucle() {
@@ -674,14 +851,24 @@
     const dt = Math.min(reloj.getDelta(), 0.05);    // cap: evita saltos tras un lag
     estado.tiempo += dt;
 
-    animarFlores(dt);
+    animarRamo();
     animarPolen(dt);
     pasoMaquina(dt * 1000);
 
+    // El ramo se desliza suave hacia su encuadre (al esconder la carta,
+    // al girar el celular…). Suavizado independiente de los FPS.
+    const suave = 1 - Math.exp(-dt * 3.5);
+    ramo.position.lerp(destino.pos, suave);
+    ramo.scale.setScalar(mezclar(ramo.scale.x, destino.escala, suave));
+
+    // Las luces acompañan al ramo
+    luzClave.position.set(ramo.position.x + 4.5, ramo.position.y + 7.5, 5.5);
+    luzCalida.position.set(ramo.position.x + 0.6, ramo.position.y + 2.8 * ramo.scale.x, 3.8);
+
     // Parallax: la cámara persigue con suavidad su posición objetivo
     const fuerza = MENOS_MOVIMIENTO ? 0 : 1;
-    camara.position.x += (camaraBase.x + puntero.x * 0.75 * fuerza - camara.position.x) * 0.05;
-    camara.position.y += (camaraBase.y - puntero.y * 0.45 * fuerza - camara.position.y) * 0.05;
+    camara.position.x += (camaraBase.x + puntero.x * 0.6 * fuerza - camara.position.x) * 0.05;
+    camara.position.y += (camaraBase.y - puntero.y * 0.4 * fuerza - camara.position.y) * 0.05;
     camara.lookAt(objetivo);
 
     renderer.render(escena, camara);
@@ -710,7 +897,8 @@
   };
 
   function pasoMaquina(dtMs) {
-    if (!maquina.activa || maquina.terminada) return;
+    // Con la carta escondida la máquina se pausa: sigue donde quedó al volver
+    if (!maquina.activa || maquina.terminada || estado.cartaOculta) return;
 
     maquina.acumulado += dtMs;
     let guardia = 0;     // por si la pestaña estuvo quieta: no escribimos 5000 letras de golpe
@@ -755,8 +943,8 @@
    * cerca del final. Si subió a releer un párrafo, no lo empujamos.
    */
   function seguirEscritura() {
-    const resto = card.scrollHeight - card.scrollTop - card.clientHeight;
-    if (resto < 90) card.scrollTop = card.scrollHeight;
+    const resto = cardScroll.scrollHeight - cardScroll.scrollTop - cardScroll.clientHeight;
+    if (resto < 90) cardScroll.scrollTop = cardScroll.scrollHeight;
   }
 
   /** Muestra la carta entera de una (al tocar la tarjeta). */
@@ -777,7 +965,7 @@
     if (maquina.cursor && maquina.cursor.parentNode) maquina.cursor.parentNode.removeChild(maquina.cursor);
     hint.classList.remove('is-visible');
     sign.classList.add('is-visible');
-    card.scrollTop = card.scrollHeight;
+    cardScroll.scrollTop = cardScroll.scrollHeight;
   }
 
   function iniciarCarta() {
@@ -790,6 +978,27 @@
   }
 
   card.addEventListener('click', completarCarta);
+
+  /* =============================================================
+     9.b ESCONDER / MOSTRAR LA CARTA (celular)
+     En el celu la carta tapa medio ramo: con la flechita se esconde
+     hacia abajo y el ramo se desliza al centro. La píldora "Ver la
+     carta" la trae de vuelta (la máquina de escribir sigue donde quedó).
+     ============================================================= */
+  function ocultarCarta(ocultar) {
+    estado.cartaOculta = ocultar;
+    card.classList.toggle('is-collapsed', ocultar);
+    btnLetter.classList.toggle('is-visible', ocultar);
+    btnHide.setAttribute('aria-expanded', String(!ocultar));
+    btnLetter.setAttribute('aria-expanded', String(!ocultar));
+    actualizarComposicion();          // el ramo se reacomoda con transición suave
+  }
+
+  btnHide.addEventListener('click', function (ev) {
+    ev.stopPropagation();             // si no, el toque llega a la carta y la completa de golpe
+    ocultarCarta(true);
+  });
+  btnLetter.addEventListener('click', function () { ocultarCarta(false); });
 
   /* =============================================================
      10. CLAVE DE 4 DÍGITOS
@@ -912,7 +1121,9 @@
   // el autoplay, el primer toque en la pantalla o el propio botón.
   audio.addEventListener('play', () => estadoBoton(true));
   audio.addEventListener('pause', () => estadoBoton(false));
-  estadoBoton(false);
+  // Estado inicial REAL: el autoplay del <audio> puede haber arrancado antes
+  // de que cargue este script (y ese evento 'play' ya no lo escuchamos).
+  estadoBoton(!audio.paused);
 
   /** Lleva el volumen hasta "destino" de a poquito (entrada elegante). */
   let fundidoActivo = 0;
@@ -941,7 +1152,7 @@
    */
   function reproducir(opciones) {
     const o = opciones || {};
-    if (!audio.paused) return;                // ya está sonando: no la reiniciamos
+    if (!audio.paused) { estadoBoton(true); return; }   // ya suena: no la reiniciamos
     // (en iPhone el volumen es de solo lectura: ahí simplemente no hay fundido)
     if (o.fundido) audio.volume = 0;
     const promesa = audio.play();
