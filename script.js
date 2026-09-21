@@ -10,6 +10,7 @@
      4. Geometría: pétalos, girasol, tulipán, tallos, hojas
      5. Armado del ramo (tallos cruzados + moño)
      6. Polen flotante (partículas)
+     6.b Lluvia de pétalos (pantalla de inicio)
      7. Composición responsive y resize
      8. Bucle de animación (florecimiento + vaivén)
      9. Carta con efecto máquina de escribir (+ esconderla en el celu)
@@ -201,6 +202,12 @@
     // ---------- POLEN ----------
     polen = crearPolen(ESMOVIL ? 160 : 320);
     escena.add(polen);
+
+    // ---------- LLUVIA DE PÉTALOS (mientras espera abrir el regalo) ----------
+    if (!MENOS_MOVIMIENTO) {
+      lluvia = crearLluvia();
+      escena.add(lluvia);
+    }
 
     actualizarComposicion(true);
   }
@@ -507,6 +514,10 @@
       punta: 'aguda', grosor: 0.02, segmentos: 12, base: [0.78, 0.84, 0.78],
     });
 
+    // Versiones centradas para la lluvia: giran sobre su centro, no sobre la base
+    GEO.lluviaGirasol = GEO.petaloGirasol.clone().translate(0, -0.31, 0);
+    GEO.lluviaTulipan = GEO.petaloTulipan.clone().translate(0, -0.45, 0);
+
     GEO.semilla = new THREE.IcosahedronGeometry(0.032, 0);
     GEO.cupula = new THREE.SphereGeometry(1, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2);            // media esfera de arriba
     GEO.reverso = new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2); // media esfera de abajo
@@ -694,6 +705,131 @@
   }
 
   /* =============================================================
+     6.b LLUVIA DE PÉTALOS (pantalla de inicio)
+     Mientras espera para abrir el regalo caen pétalos de girasol y de
+     tulipán: los MISMOS pétalos 3D del ramo, en dos InstancedMesh
+     (2 draw calls para toda la lluvia). Cada pétalo:
+       · baja despacio: más rápido en el centro del vaivén y más lento
+         en los extremos, como caen las hojas de verdad
+       · se balancea de lado a lado (seno) y se inclina hacia donde va
+       · da vueltas sobre sí mismo, así el dorado brilla al girar
+     Al abrir el regalo ya no nacen pétalos nuevos: los que quedan caen
+     un poco más rápido y la lluvia se apaga sola.
+     ============================================================= */
+  let lluvia = null;
+
+  /** Medio alto visible a la profundidad z (la cámara está en z = DISTANCIA_CAMARA). */
+  function mitadAltoEn(z) {
+    return Math.tan((camara.fov / 2) * Math.PI / 180) * (DISTANCIA_CAMARA - z);
+  }
+
+  /** Ubica un pétalo arriba de la pantalla (o a cualquier altura al arrancar). */
+  function sembrarPetalo(p, alInicio) {
+    p.z = -4 + Math.random() * 5.5;                // −4 lejos … 1,5 cerca de la cámara
+    const mitadAlto = mitadAltoEn(p.z);
+    const mitadAncho = mitadAlto * camara.aspect;
+    p.x0 = azar(mitadAncho * 1.05);
+    p.y = alInicio
+      ? -mitadAlto + Math.random() * (mitadAlto * 2 + 1)   // ya repartidos: la pantalla no arranca vacía
+      : mitadAlto + 0.5 + Math.random() * 1.5;             // nace justo arriba del borde
+    p.vy = 0.38 + Math.random() * 0.34;            // velocidad de caída
+    p.amp = 0.2 + Math.random() * 0.45;            // ancho del vaivén
+    p.frec = 0.9 + Math.random() * 0.8;            // ritmo del vaivén
+    p.fase = Math.random() * Math.PI * 2;
+    p.deriva = azar(0.1);                          // brisa: se corre de a poco
+    p.rx = Math.random() * Math.PI * 2;
+    p.ry = Math.random() * Math.PI * 2;
+    p.vrx = azar(1.3);                             // vueltas sobre sí mismo
+    p.vry = azar(1.8);
+    p.t = 0;
+    p.vivo = true;
+  }
+
+  function crearLluvia() {
+    const grupo = new THREE.Group();
+    const total = ESMOVIL ? 26 : 44;
+    // Materiales propios con más brillo: los pétalos "encienden" la noche
+    // y su cara en sombra no se ve marrón al girar
+    const brillo = function (m) { const c = m.clone(); c.emissiveIntensity = 0.26; return c; };
+    const tipos = [
+      { geo: GEO.lluviaGirasol, mat: brillo(MAT.girasol), escala: 1.0 },
+      { geo: GEO.lluviaTulipan, mat: brillo(materialPetalo(0xffd21f, 0xff9d00)), escala: 0.55 },
+    ];
+
+    tipos.forEach(function (tipo) {
+      const n = Math.round(total / tipos.length);
+      const malla = new THREE.InstancedMesh(tipo.geo, tipo.mat, n);
+      malla.frustumCulled = false;                 // las instancias andan por toda la pantalla
+      const petalos = [];
+      for (let i = 0; i < n; i++) {
+        const p = { escala: tipo.escala * (0.5 + Math.random() * 0.45) };
+        sembrarPetalo(p, true);
+        petalos.push(p);
+        if (malla.setColorAt) {                    // cada pétalo con su tono
+          const v = 0.88 + Math.random() * 0.18;
+          _tinte.setRGB(v, v * (0.95 + Math.random() * 0.08), v);
+          malla.setColorAt(i, _tinte);
+        }
+      }
+      malla.userData.petalos = petalos;
+      grupo.add(malla);
+    });
+    return grupo;
+  }
+
+  /** Esconde un pétalo que ya no va a volver (escala 0). */
+  function apagarPetalo(malla, i, p) {
+    p.vivo = false;
+    _maniqui.scale.setScalar(0);
+    _maniqui.updateMatrix();
+    malla.setMatrixAt(i, _maniqui.matrix);
+  }
+
+  function animarLluvia(dt) {
+    if (!lluvia || !lluvia.visible) return;
+
+    // Al abrir el regalo los pétalos que quedan aceleran de a poco (×1 → ×2,6)
+    const prisa = estado.abierto ? 1 + Math.min(1.6, (estado.tiempo - estado.t0) * 0.8) : 1;
+    let enPantalla = 0;
+
+    lluvia.children.forEach(function (malla) {
+      const petalos = malla.userData.petalos;
+      for (let i = 0; i < petalos.length; i++) {
+        const p = petalos[i];
+        if (!p.vivo) continue;
+
+        const mitadAlto = mitadAltoEn(p.z);
+        // Con el regalo abierto, los que todavía no entraron a la pantalla no aparecen
+        if (estado.abierto && p.y > mitadAlto + 0.3) { apagarPetalo(malla, i, p); continue; }
+
+        p.t += dt;
+        const onda = p.t * p.frec + p.fase;
+        p.y -= p.vy * prisa * (0.65 + 0.55 * Math.abs(Math.cos(onda))) * dt;
+        p.rx += p.vrx * dt;
+        p.ry += p.vry * dt;
+
+        // ¿Salió por abajo? Renace arriba… salvo que el regalo ya esté abierto
+        if (p.y < -mitadAlto - 0.8) {
+          if (estado.abierto) { apagarPetalo(malla, i, p); continue; }
+          sembrarPetalo(p, false);
+        }
+
+        _maniqui.position.set(p.x0 + p.deriva * p.t + Math.sin(onda) * p.amp, p.y, p.z);
+        // Se inclina hacia donde se balancea (la derivada del seno es el coseno)
+        _maniqui.rotation.set(p.rx, p.ry, Math.cos(onda) * 0.6);
+        _maniqui.scale.setScalar(p.escala);
+        _maniqui.updateMatrix();
+        malla.setMatrixAt(i, _maniqui.matrix);
+        enPantalla++;
+      }
+      malla.instanceMatrix.needsUpdate = true;
+    });
+
+    // Cayó el último pétalo después de abrir el regalo: apagamos la lluvia
+    if (estado.abierto && enPantalla === 0) lluvia.visible = false;
+  }
+
+  /* =============================================================
      7. COMPOSICIÓN RESPONSIVE + RESIZE
      El ramo se escala y se ubica para entrar SIEMPRE en la zona libre
      de la pantalla. Con la cámara mirando derecho, el alto de pantalla
@@ -853,6 +989,7 @@
 
     animarRamo();
     animarPolen(dt);
+    animarLluvia(dt);
     pasoMaquina(dt * 1000);
 
     // El ramo se desliza suave hacia su encuadre (al esconder la carta,
